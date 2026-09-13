@@ -1,0 +1,105 @@
+# Exploratory Data Analysis & Keyword Extraction
+
+## Top 50 words
+- amazon: 18387
+- delivery: 10739
+- order: 10439
+- prime: 9729
+- delivered: 5967
+- its: 5929
+- service: 5920
+- day: 5670
+- when: 5656
+- get: 5559
+- now: 5509
+- why: 5297
+- been: 5199
+- customer: 4886
+- package: 4774
+- they: 4632
+- what: 4537
+- still: 4416
+- que: 4416
+- help: 4365
+- ordered: 4363
+- today: 4255
+- how: 4246
+- please: 4195
+- time: 4147
+- one: 4088
+- days: 4074
+- will: 3595
+- out: 3437
+- dont: 3368
+- got: 3278
+- all: 3206
+- product: 3130
+- account: 3020
+- amp: 2999
+- cant: 2917
+- received: 2774
+- there: 2622
+- had: 2615
+- shipping: 2600
+- any: 2598
+- hey: 2576
+- even: 2575
+- deliver: 2470
+- refund: 2466
+- email: 2466
+- item: 2443
+- need: 2405
+- ive: 2403
+- after: 2254
+
+## Top 50 bigrams
+- customer service: 2349
+- amazon prime: 1845
+- day delivery: 1343
+- day shipping: 1152
+- next day: 983
+- please help: 780
+- prime membership: 758
+- customer care: 718
+- out delivery: 669
+- its been: 614
+- prime member: 553
+- ive been: 552
+- delivered today: 514
+- delivery date: 505
+- one day: 504
+- been delivered: 501
+- amazon pay: 501
+- all day: 497
+- still waiting: 494
+- more than: 424
+- when will: 420
+- pay prime: 393
+- havent received: 392
+- black friday: 391
+- delivery service: 389
+- amazon india: 372
+- fire stick: 364
+- same day: 361
+- placed order: 360
+- two days: 349
+- prime delivery: 349
+- dont know: 347
+- prime video: 343
+- gift card: 331
+- need help: 326
+- amazon logistics: 320
+- didnt get: 315
+- cancel order: 312
+- prime now: 310
+- guaranteed delivery: 308
+- whats point: 302
+- package delivered: 294
+- how get: 291
+- every time: 290
+- ive had: 289
+- echo dot: 274
+- customer support: 274
+- amazon delivery: 273
+- ordered something: 271
+- get refund: 270
