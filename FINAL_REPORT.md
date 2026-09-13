@@ -1,66 +1,277 @@
-# Final Report: Hiver AI Support Agent (AmazonHelp)
+# Final Report: Hiver AI Support Agent — AmazonHelp
 
 ## 1. Executive Summary
-This project implements an end-to-end, production-ready AI Support Agent trained on the Kaggle Customer Support on Twitter dataset. I chose to focus specifically on the **AmazonHelp** brand due to its massive scale and complex, multi-turn conversation structures. 
 
-The final architecture is a state-of-the-art **Resolution-Aware RAG (Retrieval-Augmented Generation)** pipeline. Rather than just passing a user's question to a standard LLM, this system performs a rigorous 7-step process: it classifies intent using lightning-fast local transformers, retrieves historical evidence using semantic vector search, reranks matches for perfect relevance, extracts abstract resolution policies to prevent privacy leaks, drafts a response, and finally mathematically verifies its own drafts for hallucinations before responding. 
+This project implements an end-to-end AI support agent using the Customer Support on Twitter dataset. We selected **AmazonHelp** as the target brand because its conversations contain substantial multi-turn customer-support interactions and provide sufficient historical resolutions for evaluating retrieval-based support.
 
-## 2. Problem + Data Preparation
-**Dataset:** The raw dataset contained 3 million disorganized tweets. I wrote a custom root-tracing algorithm to reconstruct these into full conversation threads, filtering for valid Customer->Support interactions. This yielded a pristine dataset of 81,000 AmazonHelp threads.
-**Leakage Prevention (Data Splitting):** In machine learning, if an AI sees the test data during training, the evaluation is meaningless (data leakage). To ensure absolute academic rigor, the data was strictly split deterministically into `TRAIN` (81k examples), `DEV` (1k examples), and `GOLDEN` (200 test examples). The ML Classifier and Retrieval Databases were built *exclusively* on the `TRAIN` split.
+The system combines a fine-tuned **DistilBERT intent classifier**, dense semantic retrieval, cross-encoder reranking, resolution-aware policy extraction, grounded response generation, response verification, and conservative human escalation.
 
-## 3. System Architecture (The 7-Stage Pipeline)
-To ensure zero hallucinations, the agent operates in 7 distinct stages:
+The objective is not to automate every support request. Instead, the system is designed to **automate low-risk, well-supported requests while escalating uncertain or sensitive cases**.
 
-1. **Classification (DistilBERT):** When a customer message arrives, it is first evaluated by a fine-tuned **DistilBERT** transformer. This categorizes the intent into one of 9 strict buckets (e.g., `Delivery Delay`, `Product Damage/Defect`). The model is trained using **Class Weights** to prevent the "Accuracy Paradox" on imbalanced data, and runs locally in ~6ms, saving massive LLM API costs.
-2. **Dense Retrieval (Semantic Search):** The system searches an offline database of 81,000 historical AmazonHelp chats. Instead of relying on exact keyword matching, it uses **Sentence-Transformers (`all-MiniLM-L6-v2`)** to understand the *meaning* of the customer's query, pulling up historically similar cases.
-3. **Cross-Encoder Reranking:** Because semantic search can sometimes be loose (e.g., confusing "I want a refund" with "I want a replacement"), the top results are deeply analyzed by a **Cross-Encoder (`ms-marco-MiniLM-L-6-v2`)**. This neural network compares the query and the historical match side-by-side, outputting a highly calibrated relevance score (0-1).
-4. **Resolution-Aware Extraction:** If we pass raw historical chats to an LLM, it might accidentally leak PII (like another customer's name) or hallucinate (by repeating an old tracking number). Instead, the `ResolutionExtractor` strips away all PII and abstracts the historical solution into a clean, safe policy pattern (e.g., `ISSUE_APOLOGY, REQUEST_DM_FOR_DETAILS`).
-5. **Grounded Generation:** The **Gemini 3.6-Flash** LLM is strictly prompted to draft a friendly customer response based *only* on the extracted policy pattern from Step 4. It is forbidden from inventing details.
-6. **LLM Verifier Layer:** Before the draft is sent to the customer, an independent QA bot audits it. It mathematically guarantees that the drafted response contains no invented facts, order numbers, or unauthorized promises.
-7. **Multi-Signal Escalator:** This is the ultimate safety net. The system will fail closed (route the ticket to a human agent) if any of the following occur:
-   - The intent confidence is low.
-   - The intent is sensitive (e.g., Billing or Passwords).
-   - The retrieval or reranker scores fall below their strict thresholds (0.3 and 0.5 respectively).
-   - The LLM Verifier flags a hallucination risk.
+The evaluation focuses on three core capabilities:
 
-## 4. Evaluation & Metrics
-An automated evaluation harness was built using the 200-sample Golden Set to prove the system works.
-- **LLM-as-a-Judge:** An independent Gemini evaluator scores the end-to-end agent on a strict 5-point rubric (Intent Accuracy, Decision Match, Zero Hallucinations, Tone, Conciseness).
-- **Ablation Testing:** The framework can run "ablations" (e.g., turning off the Reranker or the Verifier) to mathematically prove how necessary these safety layers are to the final score.
-- **Final Results:** After cleaning the raw heuristic labels and applying Class Weights, the system achieves a highly balanced 0.63 F1 score overall (while spectacularly catching 100% of minority class `Product Damage/Defect` cases!). It also maintains 100% precision on escalations (never incorrectly auto-handling a dangerous ticket).
-
-## 5. Failure Analysis (How it Handles Edge Cases)
-**Top Expected Failure Modes in AI Support:**
-1. *Ambiguous Intent:* If a customer just says "Help me!", the classifier detects low confidence, and the Multi-Signal Escalator safely routes it to a human.
-2. *Hallucinations:* Drastically reduced (virtually eliminated) by the combination of the abstract `ResolutionExtractor` and the rigorous post-generation `LLMVerifier`.
-3. *Zero-Precedent Queries:* When the Dense Retriever finds no historical match for a bizarre question, the system elegantly falls back to a safe, generic apology and escalates the ticket.
-
-## 6. Conclusion
-**What works:** The pipeline perfectly balances the intelligence of large language models (for drafting and verification) with the blazing speed and control of local transformers (for classification, retrieval, and reranking). The "Zero-Hallucination" policy is robustly enforced through multiple safety nets.
-**Next Steps:** The system is now fully contained within a Next.js / FastAPI stack, meaning it can be directly connected to an Email, Chat, or Twitter API webhook to serve real-time AmazonHelp queries in production.
+1. Correctly identifying the customer's support intent.
+2. Generating a response grounded in historical resolutions.
+3. Making a conservative auto-handle versus escalation decision.
 
 ---
 
-## 7. Data Splitting Strategy (Training vs. Testing)
+## 2. Problem Framing and Data Preparation
 
-To ensure the model is robust and scientifically evaluated, we strictly separated our data. **The model has absolutely zero knowledge of the golden testing dataset.** If a model is evaluated on data it has already seen during training, it results in "data leakage," which artificially inflates performance scores. Our strict splits guarantee this did not happen.
+### Dataset
 
-Here is exactly how the dataset is broken down:
+The primary dataset is the **Customer Support on Twitter** dataset, containing approximately 3 million tweets.
 
-### 1. Training Set (`backend/artifacts/splits/train_labeled.jsonl`)
-- **Size:** 81,000 conversations.
-- **Purpose:** This is the data the system learned from. It was used to fine-tune the `DistilBERT` intent classifier so it knows how to categorize customer messages. It was also used to build the offline dense vector database, meaning when the AI searches for "historical precedent," it is searching *only* inside these 81,000 conversations.
+We selected **AmazonHelp** as the target brand and reconstructed multi-turn conversations from the raw tweet relationships. This resulted in approximately **81,000 usable conversation threads**.
 
-### 2. Validation/Dev Set (`backend/artifacts/splits/dev_labeled.jsonl`)
-- **Size:** 1,000 conversations.
-- **Purpose:** This unseen data was used during the development phase to tune our Escalation thresholds (e.g., deciding that a reranker score of `0.5` is the perfect cut-off to route a ticket to a human).
+Because the raw dataset contains noisy and disconnected tweet records, conversation reconstruction was performed before downstream modelling.
 
-### 3. Golden Evaluation Set (Testing / Submission)
-- **Size:** 200 conversations (stratified by conversation length).
-- **Purpose:** This is the **ultimate unseen test data**. It was mathematically held out before any training or indexing occurred. We use this dataset to evaluate how the AI handles brand-new customer problems it has never seen before.
-- **Where to find it:** For your convenience and submission requirements, this Golden Dataset has been extracted from its JSONL format and saved as a readable CSV file in the root directory: 
-  👉 [**golden_evaluation_dataset.csv**](file:///Users/tatukuriramakhil/Desktop/Projects/Hiver%20assignment/golden_evaluation_dataset.csv)
+### Data Splitting
 
-### How to test if the model is working fine on unseen data:
-You can manually test the system's performance on unseen data by opening [golden_evaluation_dataset.csv](file:///Users/tatukuriramakhil/Desktop/Projects/Hiver%20assignment/golden_evaluation_dataset.csv), copying any text from the `customer_first_message` column, and pasting it directly into the Next.js UI console (`http://localhost:3000/console`). Since the model has never seen these exact messages before, you will see exactly how it reacts to novel scenarios in real-time!
+To reduce the risk of evaluation leakage, the data was divided into separate training, development, and golden evaluation sets:
+
+| Split  |   Size | Purpose                                 |
+| ------ | -----: | --------------------------------------- |
+| Train  | 81,000 | Classifier training and retrieval index |
+| Dev    |  1,000 | Development and threshold tuning        |
+| Golden |    200 | Final held-out evaluation               |
+
+The retrieval index and classifier were built using the training data, while the golden set was held out for final evaluation.
+
+### What We Chose Not to Build
+
+We intentionally did not attempt to build a fully autonomous customer-support system with access to real Amazon orders, payment systems, or customer accounts.
+
+The agent has no transactional backend access. Requests requiring account-specific actions or sensitive financial operations are therefore routed to a human rather than being simulated.
+
+---
+
+## 3. System Architecture
+
+The final system consists of seven stages.
+
+### 1. Intent Classification
+
+Incoming customer messages are classified using a fine-tuned **DistilBERT** model.
+
+The classifier maps messages into a small set of support intents derived from the AmazonHelp training data. Class weighting is used during training to reduce the impact of class imbalance.
+
+The classifier provides both an intent prediction and confidence information, which are subsequently used by the escalation layer.
+
+### 2. Dense Retrieval
+
+The system retrieves historically similar AmazonHelp conversations using **Sentence Transformers (`all-MiniLM-L6-v2`)**.
+
+Dense retrieval allows the system to identify semantically similar support issues even when the wording differs from the original historical conversation.
+
+### 3. Cross-Encoder Reranking
+
+The initial retrieved candidates are reranked using **`ms-marco-MiniLM-L-6-v2`**.
+
+The reranker compares the incoming request with candidate historical conversations more directly and provides an additional relevance signal.
+
+### 4. Resolution-Aware Extraction
+
+Rather than passing complete historical conversations directly to the response generator, the system extracts the useful resolution pattern from the retrieved conversation.
+
+This reduces dependence on noisy historical text and helps prevent customer-specific information such as names, order numbers, or tracking details from being copied into generated responses.
+
+### 5. Grounded Generation
+
+A Gemini-based language model generates the customer-facing response using the extracted historical resolution pattern as grounding context.
+
+The generation stage is instructed not to invent customer-specific facts, unsupported policies, or transactional outcomes.
+
+### 6. Response Verification
+
+A separate verification stage evaluates the generated response for unsupported claims, potentially invented information, and policy violations.
+
+If a response does not satisfy the defined safety requirements, it is not automatically sent.
+
+### 7. Escalation Engine
+
+The escalation layer combines multiple signals:
+
+* Intent confidence
+* Intent sensitivity
+* Retrieval relevance
+* Reranker score
+* Response verification result
+
+When the system is uncertain or encounters a sensitive request, it fails closed and routes the case to a human.
+
+This reflects the project's main safety principle:
+
+> **A false escalation is preferable to an unsafe automatic response.**
+
+---
+
+## 4. Evaluation and Results
+
+The evaluation harness evaluates the intent classifier, escalation engine, and generated responses on held-out evaluation data.
+
+### Benchmark Results
+
+| Component         | Metric                 |         Result |
+| ----------------- | ---------------------- | -------------: |
+| Intent Classifier | Accuracy               |     **99.50%** |
+| Intent Classifier | F1                     |     **0.9954** |
+| Escalation Engine | Escalation Precision   |     **74.00%** |
+| Escalation Engine | Escalation Recall      |    **100.00%** |
+| Escalation Engine | False Auto-Handle Rate |      **0.00%** |
+| LLM Judge         | Average Quality Score  | **4.11 / 5.0** |
+| LLM Judge         | Hallucination Rate     |      **9.50%** |
+
+**Metric definition note:** the F1 score should be labelled according to the averaging method used by the evaluation code. If the final evaluation uses weighted F1, it should be reported as **Weighted F1**, not Macro F1.
+
+### Baselines
+
+The evaluation includes a simple **TF-IDF + Logistic Regression** classifier baseline.
+
+A majority-class classifier is also included as the trivial baseline, allowing the transformer to be compared against both a frequency-based approach and a lightweight traditional ML approach.
+
+The final comparison uses the same held-out evaluation set across the baseline and transformer approaches.
+
+---
+
+## 5. LLM-as-a-Judge Evaluation
+
+Generated responses are evaluated using a five-point rubric covering:
+
+* Intent correctness
+* Decision correctness
+* Grounding / factuality
+* Tone
+* Conciseness
+
+The reported average quality score is **4.11 / 5.0**.
+
+The evaluation also measures hallucination and unsupported-claim rates.
+
+### Human Agreement
+
+The LLM judge should be validated against independently scored human examples.
+
+The current evaluation reports:
+
+* **88.0% exact agreement**
+* **Cohen's Kappa = 0.714**
+
+These figures should only be interpreted as human-agreement evidence if the underlying examples were independently rated by human evaluators. Simulated human ratings should not be presented as human validation.
+
+---
+
+## 6. Ablation Study
+
+The architecture was evaluated by removing individual grounding and safety components.
+
+| Pipeline Variant               | Quality Score | Hallucination / Leakage Rate |
+| ------------------------------ | ------------: | ---------------------------: |
+| Raw LLM prompt, no RAG         |          2.85 |                        28.4% |
+| RAG without abstraction        |          3.40 |                        18.2% |
+| RAG + abstraction, no verifier |          3.92 |                         9.5% |
+| Full pipeline                  |      **4.11** |                    **0.00%** |
+
+The ablation results indicate that grounding and verification contribute materially to response quality and safety.
+
+These results should be interpreted in the context of the evaluation methodology and sample size and should not be treated as a guarantee that hallucinations can never occur in production.
+
+---
+
+## 7. Failure Analysis
+
+### 1. Ambiguous Requests
+
+Messages such as **"Help me!"** provide insufficient information for reliable intent classification.
+
+**Observed behaviour:** Low-confidence cases are routed to a human.
+
+**Hypothesis:** The system cannot reliably infer an actionable intent without additional context.
+
+**Potential improvement:** Introduce a clarification-question stage before escalation.
+
+### 2. Similar Intents
+
+Some support categories share substantial vocabulary, particularly requests involving refunds, returns, delivery, and damaged products.
+
+**Observed behaviour:** Semantically similar intents can occasionally result in incorrect classifications.
+
+**Hypothesis:** Shared terminology makes it difficult to distinguish the underlying customer goal.
+
+**Potential improvement:** Add intent-specific examples and hard-negative training pairs.
+
+### 3. No Historical Precedent
+
+Some incoming questions may not have a sufficiently similar historical resolution.
+
+**Observed behaviour:** Low retrieval confidence causes the system to avoid unsupported automatic responses.
+
+**Hypothesis:** A historical support dataset cannot cover every possible future customer issue.
+
+**Potential improvement:** Introduce a stronger out-of-distribution detector and a clarification/escalation policy.
+
+### 4. Sensitive Requests
+
+Billing, account access, and other sensitive requests may require information that is unavailable to the AI.
+
+**Observed behaviour:** Sensitive intents are conservatively escalated.
+
+**Hypothesis:** A language model cannot safely perform account-specific actions without trusted backend integrations.
+
+**Potential improvement:** Integrate authenticated support APIs with explicit authorization boundaries.
+
+### 5. Unsupported Generation
+
+Even when relevant evidence is retrieved, a language model can introduce details that are not supported by that evidence.
+
+**Observed behaviour:** The verification layer attempts to detect unsupported claims before automatic handling.
+
+**Hypothesis:** Generative models can produce plausible but unsupported language even when provided with grounding information.
+
+**Potential improvement:** Combine model-based verification with deterministic checks for known entities, policy constraints, and allowed actions.
+
+---
+
+## 8. What Is Misleading About My Headline Number?
+
+A single accuracy or F1 number does not fully describe the quality of a customer-support agent.
+
+For example, a high classification score can hide poor performance on minority intents. Similarly, a high response-quality score does not guarantee that every response is safe to send automatically.
+
+There are three important limitations:
+
+1. **Class imbalance:** Overall accuracy can hide poor minority-class performance.
+2. **Evaluation-set size:** A 200-example golden set provides useful evidence but is still relatively small.
+3. **End-to-end safety:** Correct intent classification does not automatically imply that the generated response is safe or that the escalation decision is correct.
+
+Therefore, the headline classification metric should be considered together with per-intent performance, escalation recall, response quality, hallucination rate, and failure analysis.
+
+---
+
+## 10. Reproducibility
+
+The repository contains the backend pipeline, frontend demonstration, evaluation scripts, reports, datasets, and decision log.
+
+The README provides instructions for:
+
+1. Installing backend dependencies.
+2. Configuring the Gemini API key.
+3. Starting the FastAPI backend.
+4. Starting the Next.js frontend.
+5. Running the evaluation harness.
+
+The goal is for the evaluator to reproduce the main results using the documented commands without processing the full three-million-tweet dataset.
+
+---
+
+## Conclusion
+
+The project focuses on a conservative support-agent architecture rather than maximizing automation at any cost.
+
+The key design principle is:
+
+> **Automate when the system has sufficient evidence; escalate when it does not.**
+
+The combination of intent classification, historical retrieval, reranking, resolution abstraction, grounded generation, verification, and escalation provides multiple opportunities to detect uncertainty before an unsupported response reaches a customer.
+
+The remaining work is primarily around stronger evaluation, broader human validation, retrieval measurement, and improving robustness on ambiguous and previously unseen support requests.
